@@ -1,0 +1,2479 @@
+import discord
+from discord.ext import commands
+import time
+import random
+import os
+from pymongo import MongoClient
+from discord.ui import Button, View
+import asyncio
+from collections import Counter
+
+
+EMOJIS = {
+    "pistol": "<:1136_gun:1497137080919130112>",
+    "knife": "<:1575knifescream:1497137058467024937>",
+    "zastita": "<:714625rolemodyellow:1497137037474660372>"
+}
+
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True  
+
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+#-----------------------kazino only-----------------
+KAZINO_CHANNEL_ID = 1500745787716403280
+
+def kazino_only():
+    async def predicate(ctx):
+        return ctx.channel.id == KAZINO_CHANNEL_ID
+    return commands.check(predicate)
+# ---------------- MONGO ----------------
+client = MongoClient(os.getenv("MONGO_URL"))
+db = client["discordbot"]
+users = db["users"]
+
+# ---------------- SHOP ITEMS ----------------
+shop_items = {
+    "pistol": 5000,
+    "knife": 1000,
+    "zastita": 10000
+}
+
+# ---------------- USER INIT ----------------
+def get_user(user_id):
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        users.insert_one({
+            "_id": user_id,
+            "cash": 100,
+            "bank": 0,
+            "dirty": 0,
+            "inventory": [],
+            "business": None,
+            "last_pay": 0
+        })
+        user = users.find_one({"_id": user_id})
+
+    return user
+@bot.event
+async def on_ready():
+    print(f"✅ Bot je online kao {bot.user}")
+    print("🚂 Railway deployment active")
+
+#--------------welcome---------------------
+@bot.event
+async def on_member_join(member):
+    channel_id = 1483475608003678278  # welcome kanal
+    rules_channel_id = 1483475314272112784
+    roles_channel_id = 1483475963684720751
+
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        return
+
+    member_count = member.guild.member_count
+
+    embed = discord.Embed(
+        description=(
+            f"**・Dobrodošao {member.mention}**\n\n"
+            f"・Pročitaj pravila u <#{rules_channel_id}>\n"
+            f"・Izaberi role u <#{roles_channel_id}>\n\n"
+            f"**・Server trenutno broji `{member_count}` članova**"
+        ),
+        color=discord.Color.gold()
+    )
+
+    embed.set_author(
+        name="GOLD NIGHT",
+        icon_url=member.guild.icon.url if member.guild.icon else None
+    )
+
+    embed.set_thumbnail(
+        url=member.avatar.url if member.avatar else member.default_avatar.url
+    )
+
+    await channel.send(embed=embed)
+# ---------------- PRIJAVA ----------------
+@bot.command()
+@kazino_only()
+async def prijava(ctx):
+    user_id = str(ctx.author.id)
+
+    existing = users.find_one({"_id": user_id})
+
+    if existing:
+        return await ctx.reply("❌ Već imaš račun!", mention_author=False)
+
+    users.insert_one({
+        "_id": user_id,
+        "cash": 0,
+        "bank": 10000,
+        "dirty": 0,
+        "inventory": [],
+        "business": None,
+        "last_pay": 0
+    })
+
+    await ctx.reply(f"✅ {ctx.author.mention} tvoj račun je uspješno kreiran!", mention_author=False)
+#---------radi-------------------------
+@bot.command()
+@kazino_only()
+async def radi(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    now = int(time.time())
+
+    last_work = user.get("work_cd", 0)
+
+    if now - last_work < 3600:
+        left = 3600 - (now - last_work)
+        minutes = left // 60
+        seconds = left % 60
+
+        embed = discord.Embed(
+            title="Posao",
+            description=f"Moraš čekati **{minutes}m {seconds}s** prije ponovnog rada.",
+            color=discord.Color.orange()
+        )
+
+        return await ctx.reply(embed=embed, mention_author=False)
+
+    
+    earnings = random.randint(200, 600)
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": earnings},
+            "$set": {"work_cd": now}
+        }
+    )
+
+    updated_user = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(
+        title="💼 Posao završen",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(
+        name="💰 Zarada",
+        value=f"```{earnings:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💵 Novo stanje",
+        value=f"```{updated_user['cash']:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+# ---------------- BANKA ----------------
+@bot.command()
+
+async def banka(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply(
+            "❌ Moraš prvo otvoriti račun sa `!prijava` da bi koristio banku!",
+            mention_author=False
+        )
+
+    def format_money(x):
+        return f"{x:,}".replace(",", ".") + "€"
+
+    cash = user.get("cash", 0)
+    bank_money = user.get("bank", 0)
+    dirty = user.get("dirty", 0)
+
+    embed = discord.Embed(
+        title="VAŠ RAČUN",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(
+        name="👤 Korisnik",
+        value=f"`{ctx.author.name}`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="<:11998cashbagwhite:1497120094843699270> Novčanik",
+        value=f"```{format_money(cash)}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="<:328827nubankcard:1497118079388483644> Banka",
+        value=f"```{format_money(bank_money)}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="<:4115blackmoneybag:1497117936312123474> Prljav novac",
+        value=f"```{format_money(dirty)}```",
+        inline=True
+    )
+
+    # 📦 INVENTORY
+    items = user.get("inventory", [])
+
+    counts = {"knife": 0, "pistol": 0, "zastita": 0}
+
+    for i in items:
+        if i in counts:
+            counts[i] += 1
+
+    inv_text = (
+        f"🔪 Nož: x{counts['knife']}\n"
+        f"🔫 Pištolj: x{counts['pistol']}\n"
+        f"🛡️ Zaštita: x{counts['zastita']}"
+    )
+
+    # 🏢 BIZNIS
+    biznis = user.get("business")
+
+    biz_names = {
+        "diler": "👑 Diler",
+        "kiosk": "🏪 Kiosk",
+        "restoran": "🍔 Restoran",
+        "autoservis": "🏭 Auto Servis",
+        "trafika": "🚬 Trafika"
+    }
+
+    biz_text = f"`{biz_names.get(biznis, 'Nemaš biznis')}`" if biznis else "`Nemaš biznis`"
+
+    # 📊 2 KOLONE (ISTI RED)
+    embed.add_field(
+        name="📦 Inventory",
+        value=inv_text,
+        inline=True
+    )
+
+    embed.add_field(
+        name="🏢 Biznis",
+        value=biz_text,
+        inline=True
+    )
+
+    await ctx.reply(embed=embed)
+# ---------------- PODIGNI ----------------
+@bot.command()
+@kazino_only()
+async def podigni(ctx, amount: int):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    if amount < 1:
+        return await ctx.reply("❌ Minimalan iznos je 1€", mention_author=False)
+
+    bank = user.get("bank", 0)
+
+    if bank < amount:
+        return await ctx.reply("❌ Nemaš dovoljno novca u banci!", mention_author=False)
+
+    # 💣 HARD EKONOMIJA → 3% fee
+    fee = int(amount * 0.03)
+    final_amount = amount - fee
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {
+                "bank": -amount,
+                "cash": final_amount
+            }
+        }
+    )
+
+    updated = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(title="Transakcija", color=discord.Color.red())
+
+    embed.add_field(
+        name="💸 Podignuto",
+        value=f"```{final_amount:,}".replace(",", ".") + "€```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="💵 Novčanik",
+        value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="💼 Naknada",
+        value=f"```-{fee:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+# ---------------- PREBACI ----------------
+@bot.command()
+@kazino_only()
+async def prebaci(ctx, amount: int):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply(
+            "❌ Moraš prvo otvoriti račun sa `!prijava`",
+            mention_author=False
+        )
+
+    if amount < 1:
+        return await ctx.reply(
+            "❌ Minimalan iznos je 1€",
+            mention_author=False
+        )
+
+    cash = user.get("cash", 0)
+
+    if cash < amount:
+        return await ctx.reply(
+            "❌ Nemaš dovoljno novca!",
+            mention_author=False
+        )
+
+    # 💣 HARD EKONOMIJA (5% fee)
+    fee = int(amount * 0.05)
+    final_amount = amount - fee
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {
+                "cash": -amount,
+                "bank": final_amount
+            }
+        }
+    )
+
+    updated = users.find_one({"_id": user_id})
+
+    def f(x):
+        return f"{x:,}".replace(",", ".") + "€"
+
+    embed = discord.Embed(
+        title="Transakcija",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Prebačeno",
+        value=f"```{f(final_amount)}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="• Banka",
+        value=f"```{f(updated.get('bank', 0))}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="• Naknada",
+        value=f"```-{f(fee)}```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+# ---------------- CRIME ----------------
+@bot.command()
+@kazino_only()
+async def crime(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo uraditi !prijava", mention_author=False)
+
+    now = int(time.time())
+
+    last_crime = user.get("crime_cd", 0)
+
+    # 24h cooldown
+    if now - last_crime < 86400:
+        left = 86400 - (now - last_crime)
+        hours = left // 3600
+        minutes = (left % 3600) // 60
+
+        embed = discord.Embed(
+            title="Kriminal",
+            description=f"Moraš čekati **{hours}h {minutes}m**",
+            color=discord.Color.orange()
+        )
+        return await ctx.reply(embed=embed, mention_author=False)
+
+    inventory = user.get("inventory", [])
+
+    # ❌ mora imati pištolj
+    if "pistol" not in inventory:
+        return await ctx.reply("❌ Treba ti pištolj za crime!", mention_author=False)
+
+    # 💣 HARD: 50% šansa fail
+    success = random.random() < 0.5
+
+    # uvijek gubi pištolj
+    inventory.remove("pistol")
+
+    if success:
+        # 💰 manja zarada nego prije
+        earnings = random.randint(8000, 20000)
+
+        users.update_one(
+            {"_id": user_id},
+            {
+                "$inc": {"dirty": earnings},
+                "$set": {
+                    "inventory": inventory,
+                    "crime_cd": now
+                }
+            }
+        )
+
+        updated = users.find_one({"_id": user_id})
+
+        embed = discord.Embed(
+            title="💀 Kriminal uspješan",
+            color=discord.Color.dark_red()
+        )
+
+        embed.add_field(
+            name="🕵️ Prljav novac",
+            value=f"```+{earnings:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🧾 Ukupno",
+            value=f"```{updated.get('dirty', 0):,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔫 Status",
+            value="Izgubio si pištolj",
+            inline=False
+        )
+
+    else:
+        # ❌ FAIL → kazna
+        penalty = random.randint(3000, 8000)
+
+        users.update_one(
+            {"_id": user_id},
+            {
+                "$inc": {"cash": -penalty},
+                "$set": {
+                    "inventory": inventory,
+                    "crime_cd": now
+                }
+            }
+        )
+
+        updated = users.find_one({"_id": user_id})
+
+        embed = discord.Embed(
+            title="🚨 Kriminal propao",
+            color=discord.Color.red()
+        )
+
+        embed.add_field(
+            name="Kazna",
+            value=f"```-{penalty:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="💵 Novčanik",
+            value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🔫 Status",
+            value="Policija te uhvatila i izgubio si pištolj",
+            inline=False
+        )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+#---------------pranjepara-------------------------------
+@bot.command()
+@kazino_only()
+async def operipare(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    dirty = user.get("dirty", 0)
+
+    if dirty <= 0:
+        return await ctx.reply("❌ Nemaš prljavog novca!", mention_author=False)
+
+    # 💣 HARD EKONOMIJA → veća taksa + šansa za gubitak
+    tax = int(dirty * 0.25)  # 25% tax
+    cleaned = dirty - tax
+
+    # 🎲 20% šansa da izgubiš dio novca
+    lose = random.random() < 0.2
+    lost_amount = 0
+
+    if lose:
+        lost_amount = int(cleaned * 0.30)  # izgubi 30% od ostatka
+        cleaned -= lost_amount
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$set": {"dirty": 0},
+            "$inc": {"cash": cleaned}
+        }
+    )
+
+    embed = discord.Embed(
+        title="PRANJE PARA",
+        color=discord.Color.green() if not lose else discord.Color.red()
+    )
+
+    embed.add_field(
+        name="Prljav novac:",
+        value=f"```{dirty:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Oprano:",
+        value=f"```{cleaned:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Taksa (25%):",
+        value=f"```{tax:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    if lose:
+        embed.add_field(
+            name="⚠️ Gubitak",
+            value=f"```-{lost_amount:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+#-----------------daily--------------------
+@bot.command()
+@kazino_only()
+async def daily(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo uraditi !prijava", mention_author=False)
+
+    now = int(time.time())
+
+    last_daily = user.get("daily_cd", 0)
+
+    # 24h cooldown
+    if now - last_daily < 86400:
+        left = 86400 - (now - last_daily)
+        hours = left // 3600
+        minutes = (left % 3600) // 60
+
+        embed = discord.Embed(
+            title="DAILY",
+            description=f"⏳ Moraš čekati **{hours}h {minutes}m**",
+            color=discord.Color.orange()
+        )
+
+        return await ctx.reply(embed=embed, mention_author=False)
+
+    # 💣 HARD EKONOMIJA
+    reward = random.randint(300, 1200)
+
+    # 🎲 15% šansa da dobiješ bonus
+    bonus = 0
+    if random.random() < 0.15:
+        bonus = random.randint(500, 1500)
+        reward += bonus
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": reward},
+            "$set": {"daily_cd": now}
+        }
+    )
+
+    updated = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(
+        title="DAILY",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Dobio si:",
+        value=f"```{reward:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    if bonus > 0:
+        embed.add_field(
+            name="🎁 Bonus",
+            value=f"```+{bonus:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+    embed.add_field(
+        name="Novo stanje:",
+        value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+#-------------------------KREDIT--------------------------
+@bot.command()
+@kazino_only()
+async def kredit(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    now = int(time.time())
+
+    last_credit = user.get("credit_cd", 0)
+
+    # 3 dana cooldown
+    if now - last_credit < 259200:
+        left = 259200 - (now - last_credit)
+        hours = left // 3600
+        minutes = (left % 3600) // 60
+
+        embed = discord.Embed(
+            title="KREDIT",
+            description=f"⏳ Moraš čekati **{hours}h {minutes}m**",
+            color=discord.Color.orange()
+        )
+        return await ctx.reply(embed=embed, mention_author=False)
+
+    # 💣 HARD EKONOMIJA
+    amount = 5000  # manji kredit
+    interest = int(amount * 0.30)  # 30% kamata
+    total_debt = amount + interest
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": amount},
+            "$set": {
+                "credit_cd": now,
+                "debt": user.get("debt", 0) + total_debt
+            }
+        }
+    )
+
+    updated = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(
+        title="KREDIT",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Dobio si:",
+        value=f"```{amount:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Kamata (30%)",
+        value=f"```{interest:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Ukupan dug",
+        value=f"```{updated.get('debt', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Novo stanje:",
+        value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+#-------------------vrati dug-------------------------
+@bot.command()
+@kazino_only()
+async def vratidug(ctx, amount: int):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    debt = user.get("debt", 0)
+    cash = user.get("cash", 0)
+
+    if debt <= 0:
+        return await ctx.reply("❌ Nemaš nikakav dug!", mention_author=False)
+
+    if amount < 1:
+        return await ctx.reply("❌ Minimalan iznos je 1€", mention_author=False)
+
+    if cash < amount:
+        return await ctx.reply("❌ Nemaš dovoljno novca u novčaniku!", mention_author=False)
+
+    if amount > debt:
+        amount = debt  # ne možeš platiti više nego što duguješ
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {
+                "cash": -amount,
+                "debt": -amount
+            }
+        }
+    )
+
+    updated = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(
+        title="💳 Otplata duga",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Plaćeno",
+        value=f"```{amount:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Preostali dug",
+        value=f"```{updated.get('debt', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Novčanik",
+        value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+#-------------PLJACKAJ-------------
+@bot.command()
+@kazino_only()
+async def pljackaj(ctx, member: discord.Member):
+
+    user_id = str(ctx.author.id)
+    target_id = str(member.id)
+
+    user = users.find_one({"_id": user_id})
+    target = users.find_one({"_id": target_id})
+
+    if not user:
+        return await ctx.reply(
+            "❌ Moraš prvo otvoriti račun sa `!prijava`",
+            mention_author=False
+        )
+
+    if not target:
+        return await ctx.reply(
+            "❌ Taj korisnik nema račun!",
+            mention_author=False
+        )
+
+    if user_id == target_id:
+        return await ctx.reply(
+            "❌ Ne možeš sebe opljačkati!",
+            mention_author=False
+        )
+
+    now = int(time.time())
+
+    # ⏳ cooldown
+    if now - user.get("rob_cd", 0) < 600:
+        left = 600 - (now - user.get("rob_cd", 0))
+
+        return await ctx.reply(
+            f"⏳ Čekaj još {left//60}m {left%60}s",
+            mention_author=False
+        )
+
+    attacker_inv = user.get("inventory", [])
+    target_inv = target.get("inventory", [])
+
+    # 🔪 mora imati nož
+    if "knife" not in attacker_inv:
+        return await ctx.reply(
+            "❌ Treba ti nož za pljačku!",
+            mention_author=False
+        )
+
+    # 🔪 uvijek izgubi nož
+    attacker_inv.remove("knife")
+
+    # 🛡️ zaštita
+    if "zastita" in target_inv:
+
+        target_inv.remove("zastita")
+
+        users.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "inventory": attacker_inv,
+                    "rob_cd": now
+                }
+            }
+        )
+
+        users.update_one(
+            {"_id": target_id},
+            {
+                "$set": {
+                    "inventory": target_inv
+                }
+            }
+        )
+
+        embed = discord.Embed(
+            title="🛡️ ZAŠTITA AKTIVIRANA",
+            color=discord.Color.blue()
+        )
+
+        embed.add_field(
+            name="PLJAČKAŠ",
+            value=f"```{ctx.author.name}```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="ŽRTVA",
+            value=f"```{member.name}```",
+            inline=True
+        )
+
+        embed.add_field(
+            name="ISHOD",
+            value="```Zaštita je blokirala pljačku```",
+            inline=False
+        )
+
+        return await ctx.reply(
+            embed=embed,
+            mention_author=False
+        )
+
+    # 💰 uvijek uspjeh
+    target_cash = target.get("cash", 0)
+
+    if target_cash <= 0:
+
+        users.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "inventory": attacker_inv,
+                    "rob_cd": now
+                }
+            }
+        )
+
+        return await ctx.reply(
+            "❌ Igrač nema novca! Izgubio si nož.",
+            mention_author=False
+        )
+
+    stolen = int(target_cash * 0.25)
+
+    users.update_one(
+        {"_id": target_id},
+        {
+            "$inc": {
+                "cash": -stolen
+            }
+        }
+    )
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {
+                "cash": stolen
+            },
+            "$set": {
+                "inventory": attacker_inv,
+                "rob_cd": now
+            }
+        }
+    )
+
+    embed = discord.Embed(
+        title="💰 PLJAČKA USPJEŠNA",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="PLJAČKAŠ",
+        value=f"```{ctx.author.name}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="ŽRTVA",
+        value=f"```{member.name}```",
+        inline=True
+    )
+
+    embed.add_field(
+        name="UKRADENO",
+        value=f"```{stolen:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await ctx.reply(
+        embed=embed,
+        mention_author=False
+    )
+#-----------------SET-----------------------
+@bot.command()
+
+async def set(ctx, member: discord.Member, amount: int):
+    OWNER_IDS = [
+        1423978463290982470,
+        633262690139242507,  # zamijeni drugim ID-om
+        910227902166102068   # zamijeni trećim ID-om
+    ]
+
+    if ctx.author.id not in OWNER_IDS:
+        return await ctx.reply("❌ Nemaš dozvolu!", mention_author=False)
+
+    user_id = str(member.id)
+
+    users.update_one(
+        {"_id": user_id},
+        {"$set": {"cash": amount}},
+        upsert=True
+    )
+
+    embed = discord.Embed(
+        title="💰 SET NOVCA",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(name="👤 Korisnik", value=f"{member.mention}", inline=False)
+    embed.add_field(name="💸 Novo stanje", value=f"```{amount:,}$```", inline=False)
+
+    await ctx.reply(embed=embed, mention_author=False)
+
+#-----------------SLOT-------------------
+@bot.command()
+@kazino_only()
+async def slot(ctx, amount: int):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`", mention_author=False)
+
+    if amount < 1:
+        return await ctx.reply("❌ Minimalan ulog je 1€", mention_author=False),
+    
+    if amount > 1000000:
+         return await ctx.reply(
+        "❌ Maksimalan ulog je `1.000.000€`",
+        mention_author=False
+         )
+
+    cash = user.get("cash", 0)
+
+    if cash < amount:
+        return await ctx.reply("❌ Nemaš dovoljno novca!", mention_author=False)
+
+    # 🚫 anti-spam cooldown
+    now = int(time.time())
+    last_slot = user.get("slot_cd", 0)
+
+    if now - last_slot < 5:
+        return await ctx.reply("⏳ Sačekaj malo prije ponovnog igranja slotova!", mention_author=False)
+
+    users.update_one(
+        {"_id": user_id},
+        {"$set": {"slot_cd": now}}
+    )
+
+    symbols = ["🍒", "🍋", "🍇", "💎", "7️⃣"]
+
+    # 🎰 START MESSAGE
+    embed = discord.Embed(
+        title="🎰 SLOT",
+        description="⏳ Sačekajte 3 sekunde...",
+        color=discord.Color.orange()
+    )
+
+    msg = await ctx.reply(embed=embed)
+
+    await asyncio.sleep(3)
+
+    r1 = random.choice(symbols)
+    r2 = random.choice(symbols)
+    r3 = random.choice(symbols)
+
+    result = f"{r1} | {r2} | {r3}"
+
+    win = 0
+
+    # 💣 WIN LOGIKA
+    if r1 == r2 == r3:
+        if r1 == "💎":
+            win = amount * 7
+        else:
+            win = amount * 2
+
+        users.update_one(
+            {"_id": user_id},
+            {"$inc": {"cash": win}}
+        )
+
+        title = "🎉 Dobitak"
+        color = discord.Color.green()
+        change_text = f"+{win:,}".replace(",", ".") + "€"
+
+    else:
+        users.update_one(
+            {"_id": user_id},
+            {"$inc": {"cash": -amount}}
+        )
+
+        title = "💀 Gubitak"
+        color = discord.Color.red()
+        change_text = f"-{amount:,}".replace(",", ".") + "€"
+
+    updated = users.find_one({"_id": user_id})
+
+    embed = discord.Embed(
+        title=title,
+        color=color
+    )
+
+    embed.add_field(
+        name="🎰 Slot",
+        value=f"```{result}```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💸 Promjena",
+        value=f"```{change_text}```",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💰 Stanje",
+        value=f"```{updated.get('cash', 0):,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await msg.edit(embed=embed)
+#-----------------RULET---------------
+import asyncio
+import random
+import time
+
+@bot.command()
+@kazino_only()
+async def rulet(ctx, choice: str, amount: int):
+
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply(
+            "❌ Moraš prvo otvoriti račun sa `!prijava`",
+            mention_author=False
+        )
+
+    if amount < 1:
+        return await ctx.reply(
+            "❌ Minimalan ulog je `1€`",
+            mention_author=False
+        )
+    if amount > 1000000:
+         return await ctx.reply(
+        "❌ Maksimalan ulog je `1.000.000€`",
+        mention_author=False
+        )
+
+    
+    cash = user.get("cash", 0)
+
+    if cash < amount:
+        return await ctx.reply(
+            "❌ Nemaš dovoljno novca!",
+            mention_author=False
+        )
+
+    # 🚫 anti spam
+    now = int(time.time())
+    last = user.get("rulet_cd", 0)
+
+    if now - last < 5:
+        return await ctx.reply(
+            "⏳ Sačekaj malo prije ponovnog ruleta!",
+            mention_author=False
+        )
+
+    users.update_one(
+        {"_id": user_id},
+        {"$set": {"rulet_cd": now}}
+    )
+
+    # 🎰 spinning
+    embed = discord.Embed(
+        title=" RULET SE VRTI...",
+        description="⏳ Sačekajte 5 sekundi...",
+        color=discord.Color.orange()
+    )
+
+    msg = await ctx.reply(embed=embed)
+
+    await asyncio.sleep(5)
+
+    # 🎲 BROJ
+    number = random.randint(0, 36)
+
+    red_numbers = {
+        1,3,5,7,9,12,14,16,18,
+        19,21,23,25,27,30,32,34,36
+    }
+
+    black_numbers = {
+        2,4,6,8,10,11,13,15,17,
+        20,22,24,26,28,29,31,33,35
+    }
+
+    if number == 0:
+        color = "green"
+    elif number in red_numbers:
+        color = "red"
+    else:
+        color = "black"
+
+    color_map = {
+        "red": "🔴",
+        "black": "⚫",
+        "green": "🟢"
+    }
+
+    choice = choice.lower()
+
+    profit = 0
+    won = False
+
+    # 🎯 BROJ
+    if choice.isdigit():
+
+        if int(choice) == number:
+            won = True
+            profit = amount * 10   # prije 25x
+
+    # 🎨 BOJA
+    else:
+
+        if choice == color:
+
+            won = True
+
+            # 🟢 GREEN
+            if color == "green":
+                profit = amount * 12   # prije 36x
+
+            # 🔴⚫ BOJE
+            else:
+                profit = amount        # pravi 2x ukupno
+
+    # 💰 CASH UPDATE
+    if won:
+        new_cash = cash + profit
+    else:
+        new_cash = cash - amount
+
+    users.update_one(
+        {"_id": user_id},
+        {"$set": {"cash": new_cash}}
+    )
+
+    # 🎯 RESULT
+    result_text = f"```{number} {color_map[color]}```"
+
+    embed = discord.Embed(
+        title="🎯 RULET REZULTAT",
+        description=result_text,
+        color=discord.Color.green() if won else discord.Color.red()
+    )
+
+    if won:
+
+        embed.add_field(
+            name="Dobitak",
+            value=f"```+{profit:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+    else:
+
+        embed.add_field(
+            name="Gubitak",
+            value=f"```-{amount:,}".replace(",", ".") + "€```",
+            inline=False
+        )
+
+    embed.add_field(
+        name="Stanje",
+        value=f"```{new_cash:,}".replace(",", ".") + "€```",
+        inline=False
+    )
+
+    await msg.edit(embed=embed)
+
+#---------------help-------------------
+@bot.command()
+async def help(ctx):
+
+    embed = discord.Embed(
+        title="💰 **KAZINO KOMANDE**",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="",
+        value=(
+            "`!prijava` - **Da otvoriš račun**\n"
+            "`!banka` - **Stanje novca i inventory**\n"
+            "`!pay @user <iznos>` - **Da pošalješ novac igraču**\n"
+            "`!daily` - **Dnevna nagrada**\n"
+            "`!pljackaj @user` - **Pljačka igrača**\n"
+            "`!crime` - **Kriminal (treba pištolj)**\n"
+            "`!operipare` - **Pranje prljavog novca**\n"
+            "`!slot <iznos>` - **Slot mašina**\n"
+            "`!rulet <boja/broj> <iznos>` - **Rulet igra**\n"
+            "`!biznisi` - **Lista biznisa**\n"
+            "`!kupibiz <ime>` - **Kupi biznis**\n"
+            "`!uzmipare` - **Uzmi pare iz biznisa**\n"
+            "`!vratidug <iznos>` - **Vrati dug**\n"
+            "`!top10` - **Leaderboard**\n"
+            "`!radi` - **Da odradiš posao\n**"
+            "`!kredit` - **Da podigneš kredit\n**"
+            "`!shop` - **Da pogledaš shop\n**"
+            "`!kupi <item>` - **Da kupiš item\n**"
+
+        
+        ),
+        inline=False
+    )
+
+    await ctx.reply(embed=embed)
+#----------------SHOP----------------
+@bot.command()
+@kazino_only()
+async def shop(ctx):
+    embed = discord.Embed(
+        title="🛒 SHOP",
+        description="Dostupni itemi:",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(
+        name=f"{EMOJIS['pistol']} Pištolj",
+        value=f"`{shop_items['pistol']:,}$`",
+        inline=False
+    )
+
+    embed.add_field(
+        name=f"{EMOJIS['knife']} Nož",
+        value=f"`{shop_items['knife']:,}$`",
+        inline=False
+    )
+
+    embed.add_field(
+        name=f"{EMOJIS['zastita']} Zaštita",
+        value=f"`{shop_items['zastita']:,}$`",
+        inline=False
+    )
+
+    embed.set_footer(text="Kupovina: !kupi <pistolj/noz/zastita>")
+
+    await ctx.reply(embed=embed)
+#------------------BUY-----------------
+@bot.command()
+@kazino_only()
+async def kupi(ctx, item: str):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply(
+            f"❌ {ctx.author.mention} moraš prvo otvoriti račun sa `!prijava`",
+            mention_author=False
+        )
+
+    item = item.lower()
+
+    aliases = {
+        "pistol": "pistol",
+        "pištolj": "pistol",
+        "pistolj": "pistol",
+
+        "knife": "knife",
+        "noz": "knife",
+        "nož": "knife",
+
+        "zastita": "zastita",
+        "zaštita": "zastita"
+    }
+
+    names = {
+        "pistol": "Pištolj",
+        "knife": "Nož",
+        "zastita": "Zaštita"
+    }
+
+    if item not in aliases:
+        return await ctx.reply("❌ Item ne postoji! Koristi: pistolj/noz/zastita")
+
+    item = aliases[item]
+
+    if item not in shop_items:
+        return await ctx.reply("❌ Taj item nije u shopu!")
+
+    price = shop_items[item]
+
+    cash = user.get("cash", 0)
+
+    if cash < price:
+        return await ctx.reply("❌ Nemaš dovoljno novca!")
+
+    inventory = user.get("inventory", [])
+
+    inventory.append(item)
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": -price},
+            "$set": {"inventory": inventory}
+        }
+    )
+
+    embed = discord.Embed(
+        title="🛒 KUPOVINA USPJEŠNA",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="User", value=f"{ctx.author.mention}", inline=False)
+    embed.add_field(name="Item", value=f"`{names[item]}`", inline=False)
+    embed.add_field(name="Cijena", value=f"`{price:,}$`", inline=False)
+    embed.add_field(name="Status", value="`Kupljeno ✔️`", inline=False)
+
+    await ctx.reply(embed=embed)
+# ---------------- BIZNISI ----------------
+@bot.command()
+@kazino_only()
+async def biznisi(ctx):
+    embed = discord.Embed(
+        title="🏢 DOSTUPNI BIZNISI",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(
+        name="👑 Diler",
+        value="💰 Cijena: `2.000.000€`\n💸 Zarada: `100.000€ / 24h`",
+        inline=False
+    )
+
+
+    embed.add_field(
+        name="🏪 Kiosk",
+        value="💰 Cijena: `250.000€`\n💸 Zarada: `35.000€ / 24h`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🍔 Restoran",
+        value="💰 Cijena: `400.000€`\n💸 Zarada: `60.000€ / 24h`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🏭 Auto Servis",
+        value="💰 Cijena: `600.000€`\n💸 Zarada: `80.000€ / 24h`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🚬 Trafika",
+        value="💰 Cijena: `150.000€`\n💸 Zarada: `25.000€ / 24h`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🛒 Kupovina",
+        value="Koristi: `!kupibiz <ime>`",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed)
+
+# ---------------- KUPI BIZNIS ----------------
+@bot.command()
+@kazino_only()
+async def kupibiz(ctx, *, biznis: str):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`")
+
+    biznis = biznis.lower().replace(" ", "")
+
+    # 🏢 BIZNISI + CIJENE (TVOJI)
+    biz = {
+        "diler": 2000000,
+        "klanicakarić": 2000000,
+        "kiosk": 250000,
+        "restoran": 400000,
+        "autoservis": 600000,
+        "trafika": 150000
+    }
+
+    names = {
+        "diler": "👑 Diler",
+        "kiosk": "🏪 Kiosk",
+        "restoran": "🍔 Restoran",
+        "autoservis": "🏭 Auto Servis",
+        "trafika": "🚬 Trafika"
+    }
+
+    if biznis not in biz:
+        return await ctx.reply("❌ Taj biznis ne postoji! Koristi !biznisi")
+
+    user_cash = user.get("cash", 0)
+
+    if user_cash < biz[biznis]:
+        return await ctx.reply("❌ Nemaš dovoljno novca!")
+
+    # 👑 UNIQUE BIZNISI (SAMO 1 VLASNIK NA SERVERU)
+    unique_biz = ["diler", "klanicakarić"]
+
+    if biznis in unique_biz:
+        existing = users.find_one({"business": biznis})
+        if existing:
+            return await ctx.reply("❌ Ovaj biznis već ima vlasnika!")
+
+    # ❌ već ima biznis
+    if user.get("business"):
+        return await ctx.reply("❌ Već posjeduješ biznis!")
+
+    # 💰 KUPNJA
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": -biz[biznis]},
+            "$set": {
+                "business": biznis,
+                "business_last_pay": 0
+            }
+        }
+    )
+
+    embed = discord.Embed(
+        title="🏢 KUPOVINA USPJEŠNA",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="📌 Biznis",
+        value=f"`{names[biznis]}`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💰 Status",
+        value="Kupljeno ✔️",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed)
+# ---------------- UZMI PARE ----------------
+@bot.command()
+@kazino_only()
+async def uzmipare(ctx):
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`")
+
+    biznis = user.get("business")
+
+    if not biznis:
+        return await ctx.reply("❌ Nemaš biznis!")
+
+    now = int(time.time())
+    last_pay = user.get("business_last_pay", 0)
+
+    # 🕒 24h cooldown
+    if now - last_pay < 86400:
+        left = 86400 - (now - last_pay)
+        hours = left // 3600
+        minutes = (left % 3600) // 60
+
+        embed = discord.Embed(
+            title="🏢 BIZNIS",
+            description=f"⏳ Sačekaj **{hours}h {minutes}m** za sljedeću isplatu.",
+            color=discord.Color.orange()
+        )
+
+        return await ctx.reply(embed=embed)
+
+    # 💰 ZARADE
+    earnings_map = {
+        "diler": 100000,
+        "klanicakarić": 100000,
+        "kladionica": 100000,
+        "klaonica": 75000,
+        "kiosk": 30000
+    }
+
+    names = {
+        "diler": "👑 Diler",
+        "kladionica": "🎰 Kladionica",
+        "klaonica": "🥩 Klaonica",
+        "kiosk": "🏪 Kiosk"
+    }
+
+    earnings = earnings_map.get(biznis, 0)
+
+    if earnings <= 0:
+        return await ctx.reply("❌ Ovaj biznis nema definisanu zaradu!")
+
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"cash": earnings},
+            "$set": {"business_last_pay": now}
+        }
+    )
+
+    embed = discord.Embed(
+        title="💰 DNEVNA ZARADA",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(
+        name="🏢 Biznis",
+        value=f"{names.get(biznis, biznis)}",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💸 Zarada",
+        value=f"```+{earnings:,}$```",
+        inline=False
+    )
+
+    await ctx.reply(embed=embed)
+# ---------------- PAY ----------------
+@bot.command()
+@kazino_only()
+async def pay(ctx, member: discord.Member, amount: int):
+    sender_id = str(ctx.author.id)
+    receiver_id = str(member.id)
+
+    sender = users.find_one({"_id": sender_id})
+    receiver = users.find_one({"_id": receiver_id})
+
+    if not sender:
+        return await ctx.reply(f"❌ {ctx.author.mention} moraš prvo otvoriti račun sa `!prijava`")
+
+    if not receiver:
+        return await ctx.reply("❌ Taj korisnik nema račun!")
+
+    if amount <= 0:
+        return await ctx.reply("❌ Unesi validan iznos!")
+
+    sender_cash = sender.get("cash", 0)
+
+    if sender_cash < amount:
+        return await ctx.reply("❌ Nemaš dovoljno novca!")
+
+    # 💸 TAX 10%
+    tax = int(amount * 0.10)
+    receive_amount = amount - tax
+
+    # 💾 UPDATE
+    users.update_one(
+        {"_id": sender_id},
+        {"$inc": {"cash": -amount}}
+    )
+
+    users.update_one(
+        {"_id": receiver_id},
+        {"$inc": {"cash": receive_amount}}
+    )
+
+    # 🧼 FORMAT FUNKCIJA (tačka umjesto zareza)
+    def fmt(x):
+        return f"{x:,}".replace(",", ".") + "$"
+
+    embed = discord.Embed(
+        title="💸 TRANSFER NOVCA",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="📤 Pošiljaoc", value=f"{ctx.author.mention}", inline=False)
+    embed.add_field(name="📥 Primalac", value=f"{member.mention}", inline=False)
+    embed.add_field(name="💰 Poslano", value=f"`{fmt(amount)}`", inline=False)
+    embed.add_field(name="🏦 Tax (10%)", value=f"`{fmt(tax)}`", inline=False)
+    embed.add_field(name="💵 Primalac dobija", value=f"`{fmt(receive_amount)}`", inline=False)
+
+    await ctx.reply(embed=embed)
+
+
+# ---------------- TOP10 ----------------
+@bot.command()
+@kazino_only()
+async def top10(ctx):
+    all_users = users.find()
+
+    leaderboard = []
+
+    def fmt(x):
+        return f"{x:,}".replace(",", ".") + "$"
+
+    for u in all_users:
+        user_id = u["_id"]
+        cash = u.get("cash", 0)
+        bank = u.get("bank", 0)
+
+        total = cash + bank
+
+        try:
+            member = await bot.fetch_user(int(user_id))
+            name = member.name
+        except:
+            name = "Unknown"
+
+        leaderboard.append((name, total))
+
+    leaderboard.sort(key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="🏆 TOP 10 NAJBOGATIJIH",
+        color=discord.Color.gold()
+    )
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    text = ""
+
+    for i, (name, total) in enumerate(leaderboard[:10], start=1):
+        medal = medals[i-1] if i <= 3 else f"#{i}"
+
+        text += (
+            f"{medal} **{name}**\n"
+            f"💰 `{fmt(total)}`\n"
+            f"・\n"
+        )
+
+    embed.add_field(
+        name="📊 Rang lista",
+        value=text or "❌ Nema podataka",
+        inline=False
+    )
+
+    embed.set_footer(text="💎 Kazino leaderboard sistem")
+
+    await ctx.reply(embed=embed)
+# ---------------- RESET SVE (FULL WIPE) ----------------
+@bot.command()
+@kazino_only()
+async def rr(ctx):
+    OWNER_ID = 910227902166102068
+
+    if ctx.author.id != OWNER_ID:
+        return await ctx.reply("❌ Nemaš dozvolu!", mention_author=False)
+
+    # 🧨 BRIŠE SVE KORISNIKE (RESET PRIJAVA)
+    users.delete_many({})
+
+    embed = discord.Embed(
+        title="🔄 FULL WIPE RESET",
+        description="✔️ Svi računi su obrisani!\n🔐 Sada svi moraju ponovo `!prijava`",
+        color=discord.Color.red()
+    )
+
+    await ctx.reply(embed=embed)
+
+# ---------------- AVATAR ----------------
+@bot.command()
+async def avatar(ctx, member: discord.Member = None):
+    member = member or ctx.author
+
+    embed = discord.Embed(
+        title=f"Profilna slika od {member.name}",
+        color=discord.Color.blue()
+    )
+
+    embed.set_image(url=member.display_avatar.url)
+
+    embed.set_footer(text=f"Traženo od {ctx.author.name}")
+
+    await ctx.reply(embed=embed)
+
+#-----------------------s---------------
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        await ctx.reply(
+            "Kazino komande rade samo u <#1500745787716403280>!",
+            mention_author=False
+        )
+
+#-----------------obavjest--------------
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def obavjestenje(ctx, *, poruka: str):
+
+    embed = discord.Embed(
+        title="📢 OBAVJEŠTENJE",
+        description=poruka,
+        color=discord.Color.gold()
+    )
+
+    embed.set_footer(text=f"{ctx.guild.name}")
+
+    await ctx.channel.send(embed=embed)
+
+#-----------crash------------------------
+@bot.command()
+async def crash(ctx, bet: int):
+
+    user_id = str(ctx.author.id)
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo !prijava", mention_author=False)
+
+    cash = user.get("cash", 0)
+
+    if bet <= 0:
+        return await ctx.reply("❌ Neispravan ulog.", mention_author=False)
+
+    if bet > 100000:
+        return await ctx.reply("❌ Maksimalan ulog je 100.000€", mention_author=False)
+
+    if cash < bet:
+        return await ctx.reply("❌ Nemaš dovoljno novca.", mention_author=False)
+
+    users.update_one({"_id": user_id}, {"$inc": {"cash": -bet}})
+
+    crash_point = round(random.uniform(1.01, 25), 2)
+    multiplier = 1.00
+
+    cashed_out = False
+    crashed = False
+
+    # ---------------- BUTTON ----------------
+    class Cashout(discord.ui.Button):
+        def __init__(self):
+            super().__init__(label="💰 ISPLATI", style=discord.ButtonStyle.green)
+
+        async def callback(self, interaction: discord.Interaction):
+
+            nonlocal cashed_out, multiplier
+
+            # 🔒 samo owner
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message(
+                    "❌ Ovo nije tvoja igra.",
+                    ephemeral=True
+                )
+
+            if cashed_out:
+                return
+
+            if crashed:
+                return await interaction.response.send_message(
+                    "💥 Prekasno!",
+                    ephemeral=True
+                )
+
+            cashed_out = True
+
+            winnings = int(bet * multiplier)
+
+            users.update_one(
+                {"_id": user_id},
+                {"$inc": {"cash": winnings}}
+            )
+
+            embed = discord.Embed(
+                title="🚀 CRASH ISPLATA",
+                color=discord.Color.green()
+            )
+
+            embed.add_field(
+                name="💰 Povukao si na:",
+                value=f"`{multiplier:.2f}x`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="💥 Puklo na:",
+                value=f"`{crash_point:.2f}x`",
+                inline=True
+            )
+
+            embed.add_field(
+                name="💵 Dobitak:",
+                value=f"`{winnings:,}€`".replace(",", "."),
+                inline=False
+            )
+
+            await interaction.response.edit_message(embed=embed, view=None)
+
+    view = discord.ui.View(timeout=None)
+    view.add_item(Cashout())
+
+    # 📌 uvijek reply
+    msg = await ctx.reply(
+        embed=discord.Embed(
+            title="🚀 CRASH GAME",
+            description=f"**Multi:** `1.00x\n` **💸 Ulog:** `{bet:,}€`".replace(",", "."),
+            color=discord.Color.orange()
+        ),
+        view=view
+    )
+
+    import asyncio
+
+    while multiplier < crash_point:
+
+        await asyncio.sleep(1)
+
+        if cashed_out:
+            return
+
+        multiplier += round(random.uniform(0.03, 0.25), 2)
+
+        embed = discord.Embed(
+            title="🚀 CRASH GAME",
+            description=f"**Multi:** `{multiplier:.2f}x\n` **💸 Ulog:** `{bet:,}€`".replace(",", "."),
+            color=discord.Color.orange()
+        )
+
+        try:
+            await msg.edit(embed=embed, view=view)
+        except:
+            pass
+
+    crashed = True
+
+    if not cashed_out:
+
+        embed = discord.Embed(
+            title="💥 CRASH",
+            description=f"❌ PUKLO NA: {crash_point:.2f}x",
+            color=discord.Color.red()
+        )
+
+        embed.add_field(
+            name="💸 Izgubio si:",
+            value=f"`{bet:,}€`".replace(",", "."),
+            inline=False
+        )
+
+        await msg.edit(embed=embed, view=None)
+
+#---------------HiLo------------------
+@bot.command()
+async def hilo(ctx, bet: int):
+
+    user_id = str(ctx.author.id)
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo !prijava")
+
+    cash = user.get("cash", 0)
+
+    if bet <= 0:
+        return await ctx.reply("❌ Neispravan ulog.")
+
+    if bet > 50000:
+        return await ctx.reply("❌ Maksimalan ulog je 50.000€")
+
+    if cash < bet:
+        return await ctx.reply("❌ Nemaš dovoljno novca.")
+
+    users.update_one({"_id": user_id}, {"$inc": {"cash": -bet}})
+
+    current = random.randint(1, 13)
+    next_card = random.randint(1, 13)
+
+    # ---------- FORMAT ----------
+    def format_money(amount):
+        return f"{amount:,}".replace(",", ".") + "€"
+
+    # ---------- START EMBED ----------
+    start_embed = discord.Embed(
+        title="🎲 HILO CASINO",
+        description=(
+            f"🎯 **Trenutni broj:** `{current}`\n"
+            f"💵 **Ulog:** **{format_money(bet)}**\n\n"
+            f"⬆ Klikni **VEĆE** ako misliš da će sljedeći broj biti veći.\n"
+            f"⬇ Klikni **MANJE** ako misliš da će biti manji."
+        ),
+        color=0xf1c40f
+    )
+
+    start_embed.add_field(
+        name="💰 Mogući dobitak",
+        value=f"**{format_money(int(bet * 1.5))}**",
+        inline=True
+    )
+
+    start_embed.add_field(
+        name="🔥 Isplata",
+        value="**1.5x**",
+        inline=True
+    )
+
+    start_embed.set_footer(text=f"Igrač: {ctx.author.name}")
+
+    # ---------- BUTTON VEĆE ----------
+    class Higher(discord.ui.Button):
+        def __init__(self):
+            super().__init__(
+                label="⬆ VEĆE",
+                style=discord.ButtonStyle.green
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message(
+                    "❌ Ovo nije tvoja igra.",
+                    ephemeral=True
+                )
+
+            win = next_card > current
+
+            if win:
+
+                payout = int(bet * 1.5)
+
+                users.update_one(
+                    {"_id": user_id},
+                    {"$inc": {"cash": payout}}
+                )
+
+                embed = discord.Embed(
+                    title="📈 HILO WIN",
+                    description=(
+                        f"🎉 **Pogodio si!**\n\n"
+                        f"🎯 Brojevi:\n"
+                        f"`{current}` ➜ `{next_card}`\n\n"
+                        f"💰 **Dobitak:** **{format_money(payout)}**"
+                    ),
+                    color=0x2ecc71
+                )
+
+                embed.add_field(
+                    name="🔥 Isplata",
+                    value="**1.5x**",
+                    inline=True
+                )
+
+            else:
+
+                embed = discord.Embed(
+                    title="📉 HILO LOSS",
+                    description=(
+                        f"💥 **Izgubio si!**\n\n"
+                        f"🎯 Brojevi:\n"
+                        f"`{current}` ➜ `{next_card}`\n\n"
+                        f"💸 **Izgubljeno:** **{format_money(bet)}**"
+                    ),
+                    color=0xe74c3c
+                )
+
+            embed.set_footer(text=f"Igrač: {ctx.author.name}")
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=None
+            )
+
+    # ---------- BUTTON MANJE ----------
+    class Lower(discord.ui.Button):
+        def __init__(self):
+            super().__init__(
+                label="⬇ MANJE",
+                style=discord.ButtonStyle.red
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message(
+                    "❌ Ovo nije tvoja igra.",
+                    ephemeral=True
+                )
+
+            win = next_card < current
+
+            if win:
+
+                payout = int(bet * 1.5)
+
+                users.update_one(
+                    {"_id": user_id},
+                    {"$inc": {"cash": payout}}
+                )
+
+                embed = discord.Embed(
+                    title="📈 HILO WIN",
+                    description=(
+                        f"🎉 **Pogodio si!**\n\n"
+                        f"🎯 Brojevi:\n"
+                        f"`{current}` ➜ `{next_card}`\n\n"
+                        f"💰 **Dobitak:** **{format_money(payout)}**"
+                    ),
+                    color=0x2ecc71
+                )
+
+                embed.add_field(
+                    name="🔥 Isplata",
+                    value="**1.5x**",
+                    inline=True
+                )
+
+            else:
+
+                embed = discord.Embed(
+                    title="📉 HILO LOSS",
+                    description=(
+                        f"💥 **Izgubio si!**\n\n"
+                        f"🎯 Brojevi:\n"
+                        f"`{current}` ➜ `{next_card}`\n\n"
+                        f"💸 **Izgubljeno:** **{format_money(bet)}**"
+                    ),
+                    color=0xe74c3c
+                )
+
+            embed.set_footer(text=f"Igrač: {ctx.author.name}")
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=None
+            )
+
+    # ---------- VIEW ----------
+    view = discord.ui.View(timeout=30)
+
+    view.add_item(Higher())
+    view.add_item(Lower())
+
+    await ctx.send(
+        embed=start_embed,
+        view=view,
+        reference=ctx.message
+    )
+
+# ---------------- DICE ----------------
+@bot.command()
+async def dice(ctx, bet: int, choice: str):
+
+    user_id = str(ctx.author.id)
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        return await ctx.reply("❌ Moraš prvo otvoriti račun sa `!prijava`")
+
+    cash = user.get("cash", 0)
+
+    if bet <= 0:
+        return await ctx.reply("❌ Neispravan ulog.")
+
+    if bet > 50000:
+        return await ctx.reply("❌ Maksimalan ulog je 50.000€")
+
+    if cash < bet:
+        return await ctx.reply("❌ Nemaš dovoljno novca.")
+
+    choice = choice.lower()
+
+    # ---------- POGREŠNO KORIŠTENJE ----------
+    if choice not in ["high", "low"]:
+
+        embed = discord.Embed(
+            title="❌ Pogrešno korištenje komande",
+            description=(
+                "🎲 **Primjeri korištenja:**\n\n"
+                "`!dice 100 high`\n"
+                "`!dice 100 low`"
+            ),
+            color=0xe74c3c
+        )
+
+        embed.add_field(
+            name="📈 HIGH",
+            value="Broj preko **50**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📉 LOW",
+            value="Broj ispod **50**",
+            inline=True
+        )
+
+        embed.set_footer(text="GOLD KAZINO")
+
+        return await ctx.reply(embed=embed)
+
+    # ---------- FORMAT ----------
+    def format_money(amount):
+        return f"{amount:,}".replace(",", ".") + "€"
+
+    # ---------- UZMI ULOG ----------
+    users.update_one(
+        {"_id": user_id},
+        {"$inc": {"cash": -bet}}
+    )
+
+    # ---------- RANDOM ----------
+    rolled = random.randint(1, 100)
+
+    win = False
+
+    if choice == "high" and rolled > 50:
+        win = True
+
+    elif choice == "low" and rolled < 50:
+        win = True
+
+    # ---------- WIN ----------
+    if win:
+
+        payout = int(bet * 1.8)
+
+        users.update_one(
+            {"_id": user_id},
+            {"$inc": {"cash": payout}}
+        )
+
+        embed = discord.Embed(
+            title="🎲 DICE WIN",
+            description=(
+                f"🎯 **Tvoj izbor:** **{choice.upper()}**\n"
+                f"🎲 **Pao broj:** **{rolled}**\n\n"
+                f"💰 **Dobitak:** **{format_money(payout)}**"
+            ),
+            color=0x2ecc71
+        )
+
+        embed.add_field(
+            name="🔥 Isplata",
+            value="**1.8x**",
+            inline=True
+        )
+
+
+    # ---------- LOSS ----------
+    else:
+
+        embed = discord.Embed(
+            title="💥 DICE LOSS",
+            description=(
+                f"🎯 **Tvoj izbor:** **{choice.upper()}**\n"
+                f"🎲 **Pao broj:** **{rolled}**\n\n"
+                f"💸 **Izgubljeno:** **{format_money(bet)}**"
+            ),
+            color=0xe74c3c
+        )
+
+    embed.set_footer(text=f"Igrač: {ctx.author.name}")
+
+    await ctx.send(
+        embed=embed,
+        reference=ctx.message
+    )
+
+# ---------------- SREĆKA ----------------
+@bot.command()
+async def srecka(ctx):
+
+    user_id = str(ctx.author.id)
+
+    user = users.find_one({"_id": user_id})
+
+    if not user:
+        error_embed = discord.Embed(
+            description="❌ Moraš prvo napraviti profil sa `!prijava`",
+            color=0xe74c3c
+        )
+        return await ctx.reply(embed=error_embed)
+
+    CIJENA = 1000
+
+    # ---------- FORMAT ----------
+    def format_money(amount):
+        return f"{amount:,}".replace(",", ".") + "€"
+
+    # ---------- NEMA PARA ----------
+    if user.get("cash", 0) < CIJENA:
+
+        error_embed = discord.Embed(
+            description=f"❌ Nemaš dovoljno novca za srećku. Potrebno: **{format_money(CIJENA)}**",
+            color=0xe74c3c
+        )
+
+        return await ctx.reply(embed=error_embed)
+
+    # ---------- SKINI NOVAC ----------
+    users.update_one(
+        {"_id": user_id},
+        {"$inc": {"cash": -CIJENA}}
+    )
+
+    # ---------- SIMBOLI ----------
+    payouts = {
+        "💎": 40000,
+        "👑": 15000,
+        "💰": 10000,
+        "💵": 7500,
+        "🍀": 5000,
+        "⭐": 3000,
+        "🍒": 2500
+    }
+
+    all_symbols = list(payouts.keys())
+
+    # ---------- PRAVLJENJE TABLE ----------
+    grid = []
+
+    # 35% šansa za win
+    is_win = random.randint(1, 100) <= 35
+
+    if is_win:
+
+        weighted = (
+            ["💎"] * 1 +
+            ["👑"] * 2 +
+            ["💰"] * 4 +
+            ["💵"] * 6 +
+            ["🍀"] * 10 +
+            ["⭐"] * 14 +
+            ["🍒"] * 18
+        )
+
+        win_symbol = random.choice(weighted)
+
+        # tačno 3 ista
+        grid = [win_symbol] * 3
+
+        others = [s for s in all_symbols if s != win_symbol]
+
+        while len(grid) < 9:
+
+            symbol = random.choice(others)
+
+            if grid.count(symbol) < 2:
+                grid.append(symbol)
+
+    else:
+
+        while len(grid) < 9:
+
+            symbol = random.choice(all_symbols)
+
+            if grid.count(symbol) < 2:
+                grid.append(symbol)
+
+    random.shuffle(grid)
+
+    revealed = [False] * 9
+
+    # ---------- EMBED ----------
+    embed = discord.Embed(
+        title="🎟️ Srećka",
+        description=(
+            f"💸 Cijena srećke: **{format_money(CIJENA)}**\n\n"
+            "🎯 Ogrebi sva polja klikom na dugmad.\n"
+            "Pronađi **3 ista simbola** za dobitak!"
+        ),
+        color=0xf1c40f
+    )
+
+    embed.add_field(
+        name="💰 Dobici",
+        value=(
+            "💎 = **40.000€**\n"
+            "👑 = **15.000€**\n"
+            "💰 = **10.000€**\n"
+            "💵 = **7.500€**\n"
+            "🍀 = **5.000€**\n"
+            "⭐ = **3.000€**\n"
+            "🍒 = **2.500€**"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"Igrač: {ctx.author}")
+
+    # ---------- VIEW ----------
+    class ScratchView(View):
+
+        def __init__(self):
+            super().__init__(timeout=60)
+
+            for i in range(9):
+
+                button = Button(
+                    label="❔",
+                    style=discord.ButtonStyle.secondary,
+                    row=i // 3
+                )
+
+                async def callback(interaction: discord.Interaction, index=i):
+
+                    if interaction.user.id != ctx.author.id:
+                        return await interaction.response.send_message(
+                            "❌ Ovo nije tvoja srećka.",
+                            ephemeral=True
+                        )
+
+                    if revealed[index]:
+                        return
+
+                    revealed[index] = True
+
+                    self.children[index].label = grid[index]
+                    self.children[index].disabled = True
+                    self.children[index].style = discord.ButtonStyle.primary
+
+                    # ---------- SVA OTVORENA ----------
+                    if all(revealed):
+
+                        counts = Counter(grid)
+
+                        win_symbol = None
+
+                        for symb, count in counts.items():
+
+                            if count >= 3:
+                                win_symbol = symb
+                                break
+
+                        # ---------- WIN ----------
+                        if win_symbol:
+
+                            reward = payouts[win_symbol]
+
+                            users.update_one(
+                                {"_id": user_id},
+                                {"$inc": {"cash": reward}}
+                            )
+
+                            result_embed = discord.Embed(
+                                title="🎉 DOBITNA SREĆKA",
+                                description=(
+                                    f"✨ Pogodili ste simbol **{win_symbol}**\n\n"
+                                    f"💰 Dobitak: **{format_money(reward)}**"
+                                ),
+                                color=0x2ecc71
+                            )
+
+                        # ---------- LOSS ----------
+                        else:
+
+                            result_embed = discord.Embed(
+                                title="💥 NEMA DOBITKA",
+                                description=(
+                                    f"💸 Izgubljeno: **{format_money(CIJENA)}**"
+                                ),
+                                color=0xe74c3c
+                            )
+
+                        return await interaction.response.edit_message(
+                            embed=result_embed,
+                            view=self
+                        )
+
+                    await interaction.response.edit_message(
+                        embed=embed,
+                        view=self
+                    )
+
+                button.callback = callback
+                self.add_item(button)
+
+    await ctx.reply(
+        embed=embed,
+        view=ScratchView()
+    )
+# ---------------- RUN ----------------
+
+
+import os
+
+bot.run(os.getenv("DISCORD_TOKEN"))
