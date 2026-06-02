@@ -60,7 +60,7 @@ def get_user(user_id):
     return user
 @bot.event
 async def on_ready():
-    print(f"✅ Bot je online kao {bot.user}")
+    print(f"✅  bot je online kao {bot.user}")
     print("🚂 Railway deployment active")
 
 #--------------welcome---------------------
